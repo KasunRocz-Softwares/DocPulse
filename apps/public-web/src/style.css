@@ -122,6 +122,8 @@ input:focus-visible {
   display: flex;
   gap: 6px;
   flex: 0 1 340px;
+  /* let the search box shrink; otherwise its default width pushes the form past narrow screens */
+  min-width: 0;
 }
 .project-nav input,
 .filter-label input {
