@@ -136,13 +136,10 @@ jobs:
 
       - name: Validate production Compose configuration
         run: docker compose --file docker-compose.production.yml config --quiet
+      # The real preflight needs a downloaded release manifest with image digests and the full production
+      # configuration, so it runs at deploy time. Here it runs against complete accept/reject fixtures.
       - name: Run production secret and URL preflight
-        env:
-          DATABASE_URL: postgresql://ci:ci-only-password@postgres.production.example.test:5432/rdps?sslmode=require
-          REDIS_URL: redis://:ci-only-redis-password-with-at-least-32-bytes@redis.production.example.test:6379
-          DEPLOYMENT_RUNNER_URL: https://runner.example.test/rdps/dispatch
-          DEPLOYMENT_RUNNER_SIGNING_SECRET: ci-only-deployment-runner-signing-secret-32-bytes
-        run: bash scripts/ops/production-preflight.sh
+        run: node --test scripts/operations/production-preflight.test.mjs
       - name: Confirm restore refuses the development database URL
         env:
           RDPS_RESTORE_DATABASE_URL: postgresql://rdps:rdps_dev_only@postgres:5432/rdps?schema=public
