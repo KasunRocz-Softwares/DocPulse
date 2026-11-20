@@ -121,7 +121,9 @@ wait_for_database() {
   local container_name=$1
   local attempt
   for attempt in $(seq 1 60); do
-    if docker exec "$container_name" pg_isready -U "$database_user" -d "$database_name" >/dev/null 2>&1; then
+    # Check over TCP: the image's first-run init server listens only on the socket and is restarted
+    # right after, so a socket check can pass just before that restart and the next psql call fails.
+    if docker exec "$container_name" pg_isready -h 127.0.0.1 -U "$database_user" -d "$database_name" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
