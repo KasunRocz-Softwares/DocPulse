@@ -41,3 +41,12 @@ test("preserves any valid BCP 47 content locale and exposes catalog plus publish
     "fr-CA",
   ]);
 });
+
+test("public page widget phrases are translated, not English fallbacks", () => {
+  for (const key of ["recentReleases", "releasedOn", "pageNotFoundHeading"]) {
+    assert.notEqual(translate("si-LK", key), translate("en", key));
+    assert.notEqual(translate("ta-LK", key), translate("en", key));
+  }
+  assert.equal(translate("si-LK", "recentReleases"), "මෑත නිකුතු");
+  assert.equal(translate("fr", "releasedOn"), "Released");
+});

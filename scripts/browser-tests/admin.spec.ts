@@ -156,6 +156,14 @@ async function installAdminWorkspaceMock(page: Page) {
       method === "POST"
     ) {
       const body = request.postDataJSON() as Record<string, unknown>;
+      // Mirror the API: a blank date string is invalid (omit it instead).
+      if (body.releaseDate === "") {
+        await json(
+          { message: ["releaseDate must be a valid ISO 8601 date string"] },
+          400,
+        );
+        return;
+      }
       const release = {
         ...draftRelease(),
         id: "release-created",

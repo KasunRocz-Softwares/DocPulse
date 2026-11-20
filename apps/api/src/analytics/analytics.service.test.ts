@@ -58,7 +58,12 @@ function setup(overrides: Record<string, any> = {}) {
   return { service: new AnalyticsService(prisma, queue), calls, prisma };
 }
 
-test("public engagement ingestion persists only allowlisted fields and ignores visitor identifiers", async () => {
+test("public engagement ingestion persists only allowlisted fields and ignores visitor identifiers", async (t) => {
+  // Events are stamped with the current UTC day; freeze the clock mid-day.
+  t.mock.timers.enable({
+    apis: ["Date"],
+    now: new Date("2026-11-11T15:30:00.000Z"),
+  });
   const { service, calls } = setup();
   await service.recordPublicEvent({
     projectSlug: "widget",

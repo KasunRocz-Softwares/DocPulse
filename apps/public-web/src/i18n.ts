@@ -372,8 +372,8 @@ const tamil: Record<keyof typeof english, string> = {
   unsubscribe: "பின்தொடர்விலிருந்து விலகு",
 };
 
-/** Keys added for configurable page widgets; other catalogs fall back to these. */
-const englishWidgetStrings: Record<string, string> = {
+/** Phrases for the configurable public page (widgets, dates, not-found page). */
+const englishWidgetStrings = {
   recentReleases: "Recent releases",
   viewAllReleases: "View all",
   releaseStats: "At a glance",
@@ -389,10 +389,43 @@ const englishWidgetStrings: Record<string, string> = {
   usefulLinks: "Links",
 };
 
+const sinhalaWidgetStrings: Record<keyof typeof englishWidgetStrings, string> =
+  {
+    recentReleases: "මෑත නිකුතු",
+    viewAllReleases: "සියල්ල බලන්න",
+    releaseStats: "සාරාංශය",
+    statReleases: "ප්‍රකාශිත නිකුතු",
+    releasedOn: "නිකුත් කළේ",
+    pageNotFoundTitle: "පිටුව හමු නොවීය · RDPS",
+    pageNotFoundHeading: "මෙම පිටුව ලබා ගත නොහැක",
+    pageNotFoundBody:
+      "නිකුතු සටහන් එක් එක් නිෂ්පාදනයේම පිටුවේ ප්‍රකාශ කෙරේ. ඔබට ලැබුණු සබැඳිය පරීක්ෂා කරන්න.",
+    lastUpdated: "අවසන් වරට යාවත්කාලීන කළේ",
+    aboutProject: "පිළිබඳව",
+    pageLinks: "ගවේෂණය කරන්න",
+    usefulLinks: "සබැඳි",
+  };
+
+const tamilWidgetStrings: Record<keyof typeof englishWidgetStrings, string> = {
+  recentReleases: "சமீபத்திய வெளியீடுகள்",
+  viewAllReleases: "அனைத்தையும் காண்க",
+  releaseStats: "ஒரு பார்வையில்",
+  statReleases: "வெளியிடப்பட்ட வெளியீடுகள்",
+  releasedOn: "வெளியிடப்பட்டது",
+  pageNotFoundTitle: "பக்கம் கிடைக்கவில்லை · RDPS",
+  pageNotFoundHeading: "இந்தப் பக்கம் கிடைக்கவில்லை",
+  pageNotFoundBody:
+    "வெளியீட்டுக் குறிப்புகள் ஒவ்வொரு தயாரிப்பின் சொந்தப் பக்கத்திலும் வெளியிடப்படுகின்றன. உங்களுக்கு வழங்கப்பட்ட இணைப்பைச் சரிபார்க்கவும்.",
+  lastUpdated: "கடைசியாகப் புதுப்பிக்கப்பட்டது",
+  aboutProject: "பற்றி",
+  pageLinks: "ஆராயுங்கள்",
+  usefulLinks: "இணைப்புகள்",
+};
+
 const catalogs: Record<SupportedLocale, Record<string, string>> = {
-  en: english,
-  "si-LK": sinhala,
-  "ta-LK": tamil,
+  en: { ...english, ...englishWidgetStrings },
+  "si-LK": { ...sinhala, ...sinhalaWidgetStrings },
+  "ta-LK": { ...tamil, ...tamilWidgetStrings },
 };
 
 export function normalizeLocale(value?: string | null): SupportedLocale {
@@ -420,10 +453,7 @@ export function translate(
   values: Record<string, string | number> = {},
 ) {
   let message =
-    catalogs[normalizeLocale(locale)][key] ??
-    english[key as keyof typeof english] ??
-    englishWidgetStrings[key] ??
-    key;
+    catalogs[normalizeLocale(locale)][key] ?? catalogs.en[key] ?? key;
   for (const [name, value] of Object.entries(values))
     message = message.replaceAll(`{${name}}`, String(value));
   return message;

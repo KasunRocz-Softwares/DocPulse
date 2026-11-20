@@ -1586,8 +1586,12 @@ function ProjectPage({
     event.preventDefault();
     setWorking(true);
     setError("");
+    // Leave out blank optional fields (release date, internal summary): the
+    // API rejects "" as a date, while an omitted field simply means "not set".
     const values = Object.fromEntries(
-      new FormData(event.currentTarget).entries(),
+      [...new FormData(event.currentTarget).entries()].filter(
+        ([, value]) => typeof value !== "string" || value.trim() !== "",
+      ),
     );
     try {
       const result = await api.request<Release>(
