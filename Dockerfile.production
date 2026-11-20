@@ -16,11 +16,14 @@ ENV DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build
 RUN pnpm --filter @rdps/api db:generate
 RUN pnpm build
 
-FROM workspace AS api-dependencies
-RUN pnpm --filter @rdps/api deploy --prod --legacy /out/api
+# Deploy from the built workspace so workspace packages ship their compiled dist.
+FROM build AS api-dependencies
+RUN pnpm --filter @rdps/api deploy --prod --legacy /out/api \
+    && test -f /out/api/node_modules/@rdps/config/dist/index.cjs
 
-FROM workspace AS worker-dependencies
-RUN pnpm --filter @rdps/worker deploy --prod --legacy /out/worker
+FROM build AS worker-dependencies
+RUN pnpm --filter @rdps/worker deploy --prod --legacy /out/worker \
+    && test -f /out/worker/node_modules/@rdps/config/dist/index.cjs
 
 FROM node:24-bookworm-slim AS api
 ENV NODE_ENV=production API_PORT=3001
