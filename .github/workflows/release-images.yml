@@ -1,0 +1,515 @@
+name: Publish production images
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Semantic version tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-images-${{ github.event.inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      owner: ${{ steps.release.outputs.owner }}
+      source_commit: ${{ steps.release.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+
+      - name: Reject an already published release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          IMAGE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const { GH_TOKEN, GITHUB_REPOSITORY, IMAGE_TAG } = process.env;
+          const url = `https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${encodeURIComponent(IMAGE_TAG)}`;
+          const response = await fetch(url, {
+            headers: {
+              accept: "application/vnd.github+json",
+              authorization: `Bearer ${GH_TOKEN}`,
+              "x-github-api-version": "2022-11-28",
+            },
+            redirect: "error",
+            signal: AbortSignal.timeout(15000),
+          });
+          if (response.status === 200) {
+            throw new Error(`Release tag ${IMAGE_TAG} has already been published and cannot be reused.`);
+          }
+          if (response.status !== 404) {
+            throw new Error(`Could not verify release-tag uniqueness (HTTP ${response.status}).`);
+          }
+          NODE
+
+      - name: Resolve and validate release source
+        id: release
+        env:
+          IMAGE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo 'Manual image publication must run from the main branch.' >&2
+              exit 64
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" != "push" || "$GITHUB_REF" != "refs/tags/$IMAGE_TAG" ]]; then
+            echo 'Image publication requires a release tag.' >&2
+            exit 64
+          fi
+          if [[ ! "$IMAGE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ || ${#IMAGE_TAG} -gt 128 ]]; then
+            echo 'Release tag must be a semantic version that fits in a Docker tag.' >&2
+            exit 64
+          fi
+
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            "+refs/tags/$IMAGE_TAG:refs/release-source/tag"
+          source_commit=$(git rev-parse --verify 'refs/release-source/tag^{commit}')
+          tag_object=$(git rev-parse --verify refs/release-source/tag)
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_SHA" != "$source_commit" && "$GITHUB_SHA" != "$tag_object" ]]; then
+            echo 'The release tag changed after the push event.' >&2
+            exit 64
+          fi
+          if ! git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main; then
+            echo 'The release tag must point to a commit reachable from main.' >&2
+            exit 64
+          fi
+          {
+            echo "source_commit=$source_commit"
+            echo "owner=${GITHUB_REPOSITORY_OWNER,,}"
+            echo "tag=$IMAGE_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+  # Keep these checks aligned with ci.yml. Its reusable entry point checks out the event ref.
+  verify:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: rdps
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d rdps"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/rdps?schema=public
+      REDIS_URL: redis://127.0.0.1:6379
+      API_PORT: "3001"
+      NODE_ENV: test
+      JWT_ACCESS_SECRET: ci-only-jwt-access-secret-with-at-least-32-bytes
+      BOOTSTRAP_SECRET: ci-only-bootstrap-secret-with-at-least-32-bytes
+      RDPS_IMAGE_TAG: ci-validation
+      RDPS_GHCR_OWNER: example
+      RDPS_API_IMAGE: ghcr.io/example/rdps-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      RDPS_WORKER_IMAGE: ghcr.io/example/rdps-worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      RDPS_MIGRATE_IMAGE: ghcr.io/example/rdps-migrate@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      RDPS_WEB_IMAGE: ghcr.io/example/rdps-web@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      RDPS_ALERTMANAGER_IMAGE: ghcr.io/example/rdps-alertmanager@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      CLAMAV_IMAGE: ghcr.io/example/clamav@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+      CLAMAV_IMAGE_REPOSITORY: ghcr.io/example/clamav
+      POSTGRES_IMAGE: docker.io/library/postgres@sha256:1111111111111111111111111111111111111111111111111111111111111111
+      REDIS_IMAGE: docker.io/library/redis@sha256:2222222222222222222222222222222222222222222222222222222222222222
+      PROMETHEUS_IMAGE: quay.io/prometheus/prometheus@sha256:3333333333333333333333333333333333333333333333333333333333333333
+      POSTGRES_EXPORTER_IMAGE: quay.io/prometheuscommunity/postgres-exporter@sha256:4444444444444444444444444444444444444444444444444444444444444444
+      REDIS_EXPORTER_IMAGE: ghcr.io/oliver006/redis_exporter@sha256:5555555555555555555555555555555555555555555555555555555555555555
+      BLACKBOX_EXPORTER_IMAGE: quay.io/prometheus/blackbox-exporter@sha256:6666666666666666666666666666666666666666666666666666666666666666
+      NODE_EXPORTER_IMAGE: quay.io/prometheus/node-exporter@sha256:7777777777777777777777777777777777777777777777777777777777777777
+      POSTGRES_DB: rdps
+      POSTGRES_USER: ci
+      POSTGRES_PASSWORD: ci-only-postgres-password-with-at-least-32-bytes
+      POSTGRES_EXPORTER_USER: ci_exporter
+      POSTGRES_EXPORTER_PASSWORD: ci-only-exporter-password-with-at-least-32-bytes
+      REDIS_PASSWORD: ci-only-redis-password-with-at-least-32-bytes
+      GITHUB_WEBHOOK_SECRET: ci-only-github-webhook-secret-with-at-least-32-bytes
+      DEPLOYMENT_WEBHOOK_SECRET: ci-only-deployment-webhook-secret-with-at-least-32-bytes
+      RDPS_WORKER_SHARED_SECRET: ci-only-worker-shared-secret-with-at-least-32-bytes
+      NOTIFICATION_WORKER_SECRET: ci-only-notification-secret-with-at-least-32-bytes
+      PUBLIC_BASE_URL: https://releases.example.test
+      WEB_BASE_URL: https://admin.example.test
+      RDPS_ALERT_WEBHOOK_URL: https://alerts.example.test/rdps
+      RDPS_PRODUCTION_API_HEALTH_URL: https://api.example.test/api/v1/health/ready
+      RDPS_PRODUCTION_WEB_HEALTH_URL: https://releases.example.test/healthz
+      RDPS_PRODUCTION_PUBLIC_URL: https://releases.example.test/
+      RDPS_PRODUCTION_SITEMAP_URL: https://releases.example.test/sitemap.xml
+      RDPS_PRODUCTION_ADMIN_URL: https://admin.example.test/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install locked workspace dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install headless Chromium for browser checks
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Generate Prisma client
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/rdps
+        run: pnpm --filter @rdps/api db:generate
+      - name: Check formatting
+        run: pnpm format:check
+      - name: Lint workspace
+        run: pnpm lint
+      - name: Typecheck workspace
+        run: pnpm typecheck
+      - name: Run workspace tests
+        run: |
+          pnpm exec turbo test
+          node --test scripts/operations/*.test.mjs
+      - name: Run isolated browser smoke and collect raw axe audits
+        run: pnpm test:browser
+      - name: Upload browser reports and failure traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-check-results
+          path: |
+            scripts/browser-tests/test-results/
+            scripts/browser-tests/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Verify attachment backup and restore safety
+        run: bash scripts/operations/test-attachment-backup.sh
+      - name: Verify Docker attachment volume backup and restore
+        run: bash scripts/operations/test-attachment-volume-roundtrip.sh
+      - name: Install PostgreSQL client tools for backup verification
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Verify isolated PostgreSQL backup and restore
+        run: bash scripts/operations/test-postgres-restore-roundtrip.sh
+      - name: Run invite-to-publication end-to-end flow
+        env:
+          RDPS_E2E_API_URL: http://localhost:3001/api/v1
+          RDPS_E2E_ADMIN_EMAIL: ci-admin@example.test
+          RDPS_E2E_ADMIN_PASSWORD: ci-only-admin-password
+          BOOTSTRAP_SECRET: ci-only-bootstrap-secret-with-at-least-32-bytes
+          DEPLOYMENT_RUNNER_URL: http://127.0.0.1:3102/dispatch
+          DEPLOYMENT_RUNNER_SIGNING_SECRET: ci-only-deployment-runner-signing-secret-32-bytes
+        run: |
+          pnpm --filter @rdps/api db:deploy
+          pnpm --filter @rdps/api dev > /tmp/rdps-api.log 2>&1 &
+          API_PID=$!
+          RUNNER_PORT=3102 RDPS_API_URL=http://localhost:3001 node scripts/dev-runner/server.mjs > /tmp/rdps-runner.log 2>&1 &
+          RUNNER_PID=$!
+          RDPS_API_URL=http://localhost:3001 pnpm --filter @rdps/worker dev > /tmp/rdps-worker.log 2>&1 &
+          WORKER_PID=$!
+          trap 'kill "$API_PID" "$WORKER_PID" "$RUNNER_PID" 2>/dev/null || true' EXIT
+          curl --retry 40 --retry-delay 1 --retry-connrefused --fail http://localhost:3001/api/v1/health
+          curl --retry 20 --retry-delay 0.25 --retry-connrefused --fail http://localhost:3102/health
+          curl --fail -sS -o /dev/null -X POST http://localhost:3001/api/v1/internal/auth/bootstrap \
+            -H 'content-type: application/json' \
+            -d "{\"email\":\"$RDPS_E2E_ADMIN_EMAIL\",\"displayName\":\"CI Administrator\",\"password\":\"$RDPS_E2E_ADMIN_PASSWORD\",\"bootstrapSecret\":\"$BOOTSTRAP_SECRET\"}"
+          pnpm e2e:release-publish
+      - name: Build workspace
+        run: pnpm build
+
+      - name: Validate production Compose configuration
+        run: docker compose --file docker-compose.production.yml config --quiet
+      - name: Run production secret and URL preflight
+        env:
+          DATABASE_URL: postgresql://ci:ci-only-password@postgres.production.example.test:5432/rdps?sslmode=require
+          REDIS_URL: redis://:ci-only-redis-password-with-at-least-32-bytes@redis.production.example.test:6379
+          DEPLOYMENT_RUNNER_URL: https://runner.example.test/rdps/dispatch
+          DEPLOYMENT_RUNNER_SIGNING_SECRET: ci-only-deployment-runner-signing-secret-32-bytes
+          RDPS_RELEASE_MANIFEST: /tmp/rdps-production-images.json
+        run: |
+          node <<'NODE'
+          const { writeFileSync } = require("node:fs");
+          const images = Object.fromEntries(
+            ["api", "worker", "migrate", "web", "alertmanager"].map((name) => [
+              name,
+              process.env[`RDPS_${name.toUpperCase()}_IMAGE`],
+            ]),
+          );
+          writeFileSync(process.env.RDPS_RELEASE_MANIFEST, JSON.stringify({
+            release_tag: process.env.RDPS_IMAGE_TAG,
+            source_commit: "a".repeat(40),
+            images,
+          }));
+          NODE
+          bash scripts/ops/production-preflight.sh
+      - name: Confirm restore refuses the development database URL
+        env:
+          RDPS_RESTORE_DATABASE_URL: postgresql://rdps:rdps_dev_only@postgres:5432/rdps?schema=public
+          RDPS_RESTORE_CONFIRM: YES
+        run: |
+          if bash scripts/ops/restore-postgres-safe.sh /tmp/nonexistent.dump; then
+            echo "Restore safety check unexpectedly accepted the development database URL" >&2
+            exit 1
+          else
+            test "$?" -eq 64
+          fi
+
+  production-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [resolve, verify]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_commit }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Build API runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: api
+          push: false
+          tags: rdps-api:ci
+          cache-from: type=gha,scope=rdps-production
+          cache-to: type=gha,scope=rdps-production,mode=max
+      - name: Build worker runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: worker
+          push: false
+          tags: rdps-worker:ci
+          cache-from: type=gha,scope=rdps-production
+          cache-to: type=gha,scope=rdps-production,mode=max
+      - name: Build one-shot migration image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: migrate
+          push: false
+          tags: rdps-migrate:ci
+          cache-from: type=gha,scope=rdps-production
+          cache-to: type=gha,scope=rdps-production,mode=max
+      - name: Build non-root Alertmanager runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: alertmanager
+          push: false
+          load: true
+          tags: rdps-alertmanager:ci
+          cache-from: type=gha,scope=rdps-production
+          cache-to: type=gha,scope=rdps-production,mode=max
+      - name: Validate rendered Alertmanager webhook configuration
+        env:
+          RDPS_ALERT_WEBHOOK_URL: https://alerts.example.test/rdps
+        run: docker run --rm -e RDPS_ALERT_WEBHOOK_URL rdps-alertmanager:ci /bin/amtool check-config /tmp/alertmanager.yml
+      - name: Validate Prometheus configuration and alert rules
+        run: |
+          docker run --rm --entrypoint=/bin/promtool -v "$PWD/scripts/ops/monitoring:/etc/prometheus:ro" prom/prometheus:v3.16.0 check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint=/bin/promtool -v "$PWD/scripts/ops/monitoring:/etc/prometheus:ro" prom/prometheus:v3.16.0 check rules /etc/prometheus/alerts.yml
+      - name: Build web and Nginx image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: web
+          push: false
+          load: true
+          tags: rdps-web:ci
+          cache-from: type=gha,scope=rdps-production
+          cache-to: type=gha,scope=rdps-production,mode=max
+      - name: Validate Nginx production configuration
+        run: docker run --rm rdps-web:ci nginx -t
+
+  publish:
+    needs: [resolve, verify, production-images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+    env:
+      IMAGE_TAG: ${{ needs.resolve.outputs.tag }}
+      IMAGE_OWNER: ${{ needs.resolve.outputs.owner }}
+      SOURCE_COMMIT: ${{ needs.resolve.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_commit }}
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to GHCR with the workflow token
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish API image
+        id: api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: api
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_OWNER }}/rdps-api:${{ env.SOURCE_COMMIT }}-run${{ github.run_id }}-${{ github.run_attempt }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }},org.opencontainers.image.revision=${{ env.SOURCE_COMMIT }}
+          cache-from: type=gha,scope=rdps-api
+          cache-to: type=gha,scope=rdps-api,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Publish worker image
+        id: worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: worker
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_OWNER }}/rdps-worker:${{ env.SOURCE_COMMIT }}-run${{ github.run_id }}-${{ github.run_attempt }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }},org.opencontainers.image.revision=${{ env.SOURCE_COMMIT }}
+          cache-from: type=gha,scope=rdps-worker
+          cache-to: type=gha,scope=rdps-worker,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Publish migration image
+        id: migrate
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: migrate
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_OWNER }}/rdps-migrate:${{ env.SOURCE_COMMIT }}-run${{ github.run_id }}-${{ github.run_attempt }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }},org.opencontainers.image.revision=${{ env.SOURCE_COMMIT }}
+          cache-from: type=gha,scope=rdps-migrate
+          cache-to: type=gha,scope=rdps-migrate,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Publish web image
+        id: web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: web
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_OWNER }}/rdps-web:${{ env.SOURCE_COMMIT }}-run${{ github.run_id }}-${{ github.run_attempt }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }},org.opencontainers.image.revision=${{ env.SOURCE_COMMIT }}
+          cache-from: type=gha,scope=rdps-web
+          cache-to: type=gha,scope=rdps-web,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Publish Alertmanager image
+        id: alertmanager
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: alertmanager
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_OWNER }}/rdps-alertmanager:${{ env.SOURCE_COMMIT }}-run${{ github.run_id }}-${{ github.run_attempt }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }},org.opencontainers.image.revision=${{ env.SOURCE_COMMIT }}
+          cache-from: type=gha,scope=rdps-alertmanager
+          cache-to: type=gha,scope=rdps-alertmanager,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Write immutable digest manifest
+        env:
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          WORKER_DIGEST: ${{ steps.worker.outputs.digest }}
+          MIGRATE_DIGEST: ${{ steps.migrate.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+          ALERTMANAGER_DIGEST: ${{ steps.alertmanager.outputs.digest }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { writeFileSync } = require("node:fs");
+          const { IMAGE_OWNER, IMAGE_TAG, SOURCE_COMMIT } = process.env;
+          if (!/^[a-f0-9]{40}$/.test(SOURCE_COMMIT)) {
+            throw new Error("Invalid release source commit");
+          }
+          const images = {};
+          for (const name of ["api", "worker", "migrate", "web", "alertmanager"]) {
+            const digest = process.env[name.toUpperCase() + "_DIGEST"];
+            if (!/^sha256:[a-f0-9]{64}$/.test(digest)) {
+              throw new Error("Missing or invalid published digest for " + name);
+            }
+            images[name] = "ghcr.io/" + IMAGE_OWNER + "/rdps-" + name + "@" + digest;
+          }
+          writeFileSync("rdps-production-images.json", JSON.stringify({
+            release_tag: IMAGE_TAG,
+            source_commit: SOURCE_COMMIT,
+            images,
+          }, null, 2) + "\n");
+          NODE
+          {
+            echo '## Published production image digests'
+            echo
+            echo 'Download the manifest or use these immutable references for deployment.'
+            echo
+            printf -- '- `RDPS_IMAGE_TAG=%s`\n- `RDPS_GHCR_OWNER=%s`\n' "$IMAGE_TAG" "$IMAGE_OWNER"
+            jq -r '.images | to_entries[] | "- `RDPS_\(.key | ascii_upcase)_IMAGE=\(.value)`"' rdps-production-images.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload digest manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdps-production-images-${{ env.IMAGE_TAG }}
+          path: rdps-production-images.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish the release and attach its permanent digest manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$IMAGE_TAG" rdps-production-images.json \
+            --verify-tag \
+            --title "RDPS $IMAGE_TAG" \
+            --notes "Production image digests for source commit $SOURCE_COMMIT. Publish a new version for every source change."

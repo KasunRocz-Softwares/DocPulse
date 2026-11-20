@@ -1,0 +1,38 @@
+{
+  "name": "release-docs-system",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "turbo test && node --test scripts/operations/*.test.mjs scripts/dev-runner/*.test.mjs",
+    "e2e:isolated-publish": "node scripts/e2e/run-isolated-publish.mjs",
+    "e2e:sandbox-deployment": "node scripts/e2e/run-isolated-publish.mjs",
+    "test:browser": "playwright test --config scripts/browser-tests/playwright.config.ts",
+    "e2e:release-publish": "node scripts/e2e/full-publish-flow.mjs",
+    "e2e:webhook-runtime": "node scripts/e2e/webhook-runtime-smoke.mjs",
+    "infra:up": "docker compose up -d postgres redis",
+    "infra:down": "docker compose down",
+    "infra:logs": "docker compose logs -f postgres redis"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.65.0",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "prettier": "^3.6.2",
+    "turbo": "^2.5.8",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.2"
+  }
+}

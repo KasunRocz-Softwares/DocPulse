@@ -1,0 +1,80 @@
+.github-app-installations {
+  display: grid;
+  gap: 1rem;
+  margin-block: 1.5rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border, #d8dde5);
+  border-radius: 0.75rem;
+  background: var(--surface, #fff);
+}
+
+.github-app-installations > header,
+.github-app-connection-heading,
+.github-app-actions,
+.github-app-repositories li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.github-app-installations h2,
+.github-app-connection h3,
+.github-app-installations p {
+  margin-block: 0.25rem;
+}
+
+.github-app-connection {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--border, #d8dde5);
+  border-radius: 0.6rem;
+}
+
+.github-app-connection-heading > div:first-child p,
+.github-app-webhook,
+.github-app-empty {
+  color: var(--muted, #5d6675);
+  font-size: 0.9rem;
+}
+
+.github-app-repositories {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.github-app-repositories li {
+  padding-block: 0.5rem;
+  border-top: 1px solid var(--border, #d8dde5);
+}
+
+.github-app-error {
+  color: var(--danger, #a3262b);
+}
+
+.github-app-notice {
+  color: var(--success, #21734a);
+}
+
+.github-app-disabled {
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--surface-muted, #f1f3f6);
+}
+
+@media (max-width: 48rem) {
+  .github-app-installations > header,
+  .github-app-connection-heading,
+  .github-app-repositories li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .github-app-actions {
+    flex-wrap: wrap;
+  }
+}

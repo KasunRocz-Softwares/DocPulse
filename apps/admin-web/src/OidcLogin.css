@@ -1,0 +1,49 @@
+.oidc-login {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.oidc-login__button {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #cdd7ce;
+  border-radius: 10px;
+  background: #fff;
+  color: #263d2f;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.oidc-login__button:hover {
+  border-color: #8ca18e;
+  background: #f6f8f4;
+}
+
+.oidc-login__button:focus-visible {
+  outline: 3px solid #6e943e;
+  outline-offset: 3px;
+}
+
+.oidc-login__message {
+  margin: 0;
+  color: #a53e36;
+  font-size: 13px;
+}
+
+.oidc-login__message[role="status"] {
+  color: #263d2f;
+}
+
+.oidc-login__status {
+  margin: 0;
+  color: #63736a;
+  font-size: 13px;
+  text-align: center;
+}

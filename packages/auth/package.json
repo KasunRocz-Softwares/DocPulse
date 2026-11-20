@@ -1,0 +1,15 @@
+{
+  "name": "@rdps/auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "exports": {
+    "./oidc": {
+      "types": "./oidc.d.ts",
+      "default": "./oidc.js"
+    }
+  },
+  "scripts": {
+    "test": "node --test *.test.cjs"
+  }
+}

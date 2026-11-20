@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1.7
+FROM node:24-bookworm-slim AS workspace
+ENV COREPACK_HOME=/opt/corepack
+WORKDIR /workspace
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl tar \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable && corepack prepare pnpm@11.25.0 --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
+COPY apps ./apps
+COPY packages ./packages
+COPY database ./database
+RUN pnpm install --frozen-lockfile
+
+FROM workspace AS build
+ENV DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build
+RUN pnpm --filter @rdps/api db:generate
+RUN pnpm build
+
+FROM workspace AS api-dependencies
+RUN pnpm --filter @rdps/api deploy --prod --legacy /out/api
+
+FROM workspace AS worker-dependencies
+RUN pnpm --filter @rdps/worker deploy --prod --legacy /out/worker
+
+FROM node:24-bookworm-slim AS api
+ENV NODE_ENV=production API_PORT=3001
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 rdps && useradd --system --uid 10001 --gid rdps --home-dir /app rdps \
+    && mkdir -p /var/lib/rdps/uploads && chown -R rdps:rdps /var/lib/rdps
+COPY --from=api-dependencies --chown=rdps:rdps /out/api ./
+COPY --from=build --chown=rdps:rdps /workspace/apps/api/dist ./dist
+COPY --from=build --chown=rdps:rdps /workspace/database/prisma ./database/prisma
+USER rdps
+EXPOSE 3001
+CMD ["node", "dist/main.js"]
+
+FROM node:24-bookworm-slim AS worker
+ENV NODE_ENV=production
+WORKDIR /app
+RUN groupadd --system --gid 10001 rdps && useradd --system --uid 10001 --gid rdps --home-dir /app rdps
+COPY --from=worker-dependencies --chown=rdps:rdps /out/worker ./
+COPY --from=build --chown=rdps:rdps /workspace/apps/worker/dist ./dist
+USER rdps
+CMD ["node", "dist/main.js"]
+
+# Run once per release as a one-shot task before API instances are rolled out.
+FROM build AS migrate
+ENV NODE_ENV=production
+CMD ["pnpm", "--filter", "@rdps/api", "db:deploy"]
+
+FROM nginx:1.28-alpine AS web
+RUN apk add --no-cache nodejs
+COPY nginx/nginx.conf /etc/nginx/nginx.conf
+COPY nginx/security-headers.conf /etc/nginx/security-headers.conf
+COPY --from=build /workspace/apps/admin-web/dist /usr/share/nginx/html/admin
+COPY --from=build /workspace/apps/public-web/dist /usr/share/nginx/html/public
+COPY apps/public-web/server.mjs /opt/rdps/public-web/server.mjs
+COPY apps/public-web/start-web.sh /opt/rdps/start-web.sh
+RUN chmod 0555 /opt/rdps/start-web.sh
+ENV PUBLIC_METADATA_API_BASE_URL=http://api:3001/api/v1/public PUBLIC_METADATA_PORT=3002
+EXPOSE 8080
+ENTRYPOINT ["/bin/sh", "/opt/rdps/start-web.sh"]
+
+FROM prom/alertmanager:v0.35.0 AS alertmanager-binaries
+
+FROM busybox:1.37.0 AS alertmanager
+RUN mkdir -p /alertmanager && chown 65532:65532 /alertmanager
+COPY --from=alertmanager-binaries --chown=65532:65532 /bin/alertmanager /bin/alertmanager
+COPY --from=alertmanager-binaries --chown=65532:65532 /bin/amtool /bin/amtool
+COPY --chmod=0555 scripts/ops/monitoring/render-alertmanager-config.sh /opt/rdps/render-alertmanager-config.sh
+USER 65532:65532
+EXPOSE 9093
+ENTRYPOINT ["/bin/sh", "/opt/rdps/render-alertmanager-config.sh"]
+CMD ["/bin/alertmanager", "--config.file=/tmp/alertmanager.yml", "--storage.path=/alertmanager"]

@@ -1,0 +1,49 @@
+{
+  "name": "@rdps/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "nest start --watch",
+    "build": "nest build",
+    "lint": "eslint .",
+    "typecheck": "node ../../node_modules/typescript/bin/tsc -p ../../packages/config/tsconfig.json && tsc --noEmit",
+    "test": "node --require ts-node/register --import tsx --test \"src/**/*.test.*\" \"test/**/*.test.*\"",
+    "db:generate": "prisma generate --config ../../database/prisma/prisma.config.ts",
+    "db:migrate": "prisma migrate dev --config ../../database/prisma/prisma.config.ts",
+    "db:deploy": "prisma migrate deploy --config ../../database/prisma/prisma.config.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.2.9",
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^11.2.9",
+    "@nestjs/jwt": "^11.0.2",
+    "@nestjs/platform-express": "^11.2.9",
+    "@nestjs/swagger": "^11.4.8",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
+    "@rdps/auth": "workspace:*",
+    "@rdps/config": "workspace:*",
+    "bcryptjs": "^3.0.3",
+    "bullmq": "6.7.2",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "express": "5.2.1",
+    "ioredis": "6.0.0",
+    "openid-client": "6.8.9",
+    "pg": "^8.23.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.24",
+    "@nestjs/schematics": "^11.1.0",
+    "@nestjs/testing": "^11.2.9",
+    "@types/node": "^26.6.6",
+    "prisma": "^7.10.1",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,137 @@
+groups:
+  - name: rdps-availability
+    rules:
+      - alert: RdpsScrapeTargetMissing
+        expr: absent(up{job="rdps-api"}) or absent(up{job="rdps-api-health"}) or absent(up{job="rdps-web-health"}) or absent(up{job="postgres-exporter"}) or absent(up{job="redis-exporter"}) or absent(up{job="node-exporter"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: An expected RDPS monitoring target is missing
+          description: Prometheus has no scrape status series for the affected job. Check service discovery, the target container, and the Prometheus targets page.
+
+      - alert: RdpsApiUnavailable
+        expr: probe_success{job="rdps-api-health"} == 0 or absent(probe_success{job="rdps-api-health"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: RDPS API readiness endpoint is unavailable
+          description: The API or one of its required backing services has failed its readiness probe for at least two minutes.
+
+      - alert: RdpsApiHighServerErrorRate
+        expr: sum(rate(rdps_http_requests_total{status_code=~"5.."}[5m])) / clamp_min(sum(rate(rdps_http_requests_total[5m])), 1e-9) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RDPS API server error rate is above five percent
+          description: More than five percent of API requests have returned server errors for at least five minutes.
+
+      - alert: RdpsApiRequestLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(rdps_http_request_duration_seconds_bucket{route!="/api/v1/metrics"}[5m]))) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RDPS API p95 request latency exceeds 500 milliseconds
+          description: The measured API request p95 has exceeded the public latency target for at least five minutes.
+
+      - alert: RdpsWebUnavailable
+        expr: probe_success{job="rdps-web-health"} == 0 or absent(probe_success{job="rdps-web-health"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: RDPS web reverse proxy is unavailable
+          description: The web health probe has failed for at least two minutes.
+
+      - alert: RdpsPostgresExporterUnavailable
+        expr: up{job="postgres-exporter"} == 0 or absent(up{job="postgres-exporter"}) or pg_up == 0 or absent(pg_up)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: RDPS PostgreSQL is unavailable or not scrapeable
+          description: Verify PostgreSQL health, credentials, and exporter connectivity.
+
+      - alert: RdpsRedisExporterUnavailable
+        expr: up{job="redis-exporter"} == 0 or absent(up{job="redis-exporter"}) or redis_up == 0 or absent(redis_up)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: RDPS Redis is unavailable or not scrapeable
+          description: Verify Redis health, credentials, and exporter connectivity.
+
+      - alert: RdpsNodeExporterUnavailable
+        expr: up{job="node-exporter"} == 0 or absent(up{job="node-exporter"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: RDPS host metrics are unavailable
+          description: Prometheus cannot scrape host CPU, memory, and filesystem metrics.
+
+      - alert: RdpsBackupMetricsMissing
+        expr: absent(rdps_backup_last_run_timestamp_seconds{job="node-exporter"})
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: RDPS backup status metrics are missing
+          description: Verify the host textfile directory, backup timer, and first successful off-site backup.
+
+      - alert: RdpsBackupRunFailed
+        expr: rdps_backup_last_run_success{job="node-exporter"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The latest RDPS backup or retention run failed
+          description: Inspect the RDPS backup systemd journal, per-run status, local archives, and Restic manifest.
+
+      - alert: RdpsBackupTooOld
+        expr: time() - rdps_backup_last_success_timestamp_seconds{job="node-exporter"} > 1.5 * rdps_backup_expected_interval_seconds{job="node-exporter"}
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The last successful RDPS off-site backup is overdue
+          description: Check the approved backup cadence, host timer, repository access, and prior backup run.
+
+      - alert: RdpsHostDiskSpaceLow
+        expr: node_filesystem_avail_bytes{job="node-exporter",fstype!~"tmpfs|overlay|squashfs|ramfs|nsfs"} / node_filesystem_size_bytes{job="node-exporter",fstype!~"tmpfs|overlay|squashfs|ramfs|nsfs"} < 0.1 and node_filesystem_readonly{job="node-exporter",fstype!~"tmpfs|overlay|squashfs|ramfs|nsfs"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RDPS host filesystem has less than ten percent space available
+          description: Check the affected host mount, Docker storage usage, and backup retention.
+
+      - alert: RdpsHostMemoryLow
+        expr: node_memory_MemAvailable_bytes{job="node-exporter"} / node_memory_MemTotal_bytes{job="node-exporter"} < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RDPS host has less than ten percent memory available
+          description: Check application memory, exporter processes, and configured container limits.
+
+      - alert: RdpsHostCpuSaturation
+        expr: 1 - avg by (instance) (rate(node_cpu_seconds_total{job="node-exporter",mode="idle"}[5m])) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: RDPS host CPU utilization is above ninety percent
+          description: Sustained host CPU saturation may increase API and worker latency.
+
+      - alert: RdpsProbeLatencyHigh
+        expr: probe_duration_seconds{job=~"rdps-api-health|rdps-web-health"} > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RDPS health endpoint probe is taking over one second
+          description: Check application logs, host resource pressure, and database latency.

@@ -1,0 +1,21 @@
+{
+  "name": "@rdps/worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "typecheck": "node ../../node_modules/typescript/bin/tsc -p ../../packages/config/tsconfig.json && tsc --noEmit",
+    "test": "node --import tsx --test"
+  },
+  "dependencies": {
+    "@rdps/config": "workspace:*",
+    "bullmq": "^6.7.2",
+    "ioredis": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15"
+  }
+}

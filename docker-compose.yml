@@ -1,0 +1,200 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: rdps
+      POSTGRES_USER: rdps
+      POSTGRES_PASSWORD: rdps_dev_only
+    ports:
+      - "${RDPS_POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - rdps_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rdps -d rdps"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${RDPS_REDIS_PORT:-26379}:6379"
+    volumes:
+      - rdps_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  api:
+    image: rdps-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command:
+      [
+        "sh",
+        "-c",
+        "pnpm --filter @rdps/config build && pnpm --filter @rdps/api db:generate && pnpm --filter @rdps/api db:deploy && pnpm --filter @rdps/api dev",
+      ]
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://rdps:rdps_dev_only@postgres:5432/rdps?schema=public
+      REDIS_URL: redis://redis:6379
+      API_PORT: 3001
+      JWT_ACCESS_SECRET: local-development-secret-change-this-before-any-shared-deployment
+      BOOTSTRAP_SECRET: local-bootstrap-secret-change-before-sharing
+      GITHUB_WEBHOOK_SECRET: rdps-local-github-webhook-secret-only
+      GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET:-}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_APP_ADMIN_ORIGIN: ${GITHUB_APP_ADMIN_ORIGIN:-http://localhost:5173}
+      DEPLOYMENT_WEBHOOK_SECRET: rdps-local-deployment-webhook-secret-only
+      DEPLOYMENT_RUNNER_SIGNING_SECRET: ${DEPLOYMENT_RUNNER_SIGNING_SECRET:-rdps-local-deployment-runner-signing-secret}
+      RDPS_WORKER_SHARED_SECRET: rdps-local-worker-shared-secret-only
+      RDPS_UPLOAD_DIR: /var/lib/rdps/uploads
+      NOTIFICATION_WORKER_SECRET: rdps-local-notification-worker-secret-only
+      PUBLIC_BASE_URL: http://localhost:5174
+      WEB_BASE_URL: http://localhost:5173,http://localhost:5174
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_CALLBACK_URL: ${OIDC_CALLBACK_URL:-}
+      OIDC_STATE_SECRET: ${OIDC_STATE_SECRET:-}
+      RDPS_API_PUBLIC_ORIGIN: ${RDPS_API_PUBLIC_ORIGIN:-}
+      RDPS_OIDC_ADMIN_ORIGIN: ${RDPS_OIDC_ADMIN_ORIGIN:-}
+      OIDC_AUTO_PROVISION: ${OIDC_AUTO_PROVISION:-false}
+    ports:
+      - "13001:3001"
+    volumes:
+      - rdps_dev_attachments:/var/lib/rdps/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3001/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+  worker:
+    image: rdps-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command:
+      [
+        "sh",
+        "-c",
+        "pnpm --filter @rdps/config build && pnpm --filter @rdps/worker dev",
+      ]
+    environment:
+      NODE_ENV: development
+      REDIS_URL: redis://redis:6379
+      RDPS_API_URL: http://api:3001
+      RDPS_WORKER_SHARED_SECRET: rdps-local-worker-shared-secret-only
+      NOTIFICATION_WORKER_SECRET: rdps-local-notification-worker-secret-only
+      DEPLOYMENT_RUNNER_URL: ${DEPLOYMENT_RUNNER_URL:-http://deployment-runner:3080/dispatch}
+      DEPLOYMENT_RUNNER_SIGNING_SECRET: ${DEPLOYMENT_RUNNER_SIGNING_SECRET:-rdps-local-deployment-runner-signing-secret}
+      EMAIL_DELIVERY_URL: ${EMAIL_DELIVERY_URL:-}
+      EMAIL_DELIVERY_TOKEN: ${EMAIL_DELIVERY_TOKEN:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+      deployment-runner:
+        condition: service_healthy
+  deployment-runner:
+    image: rdps-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: ["node", "scripts/dev-runner/server.mjs"]
+    environment:
+      NODE_ENV: development
+      RUNNER_PORT: "3080"
+      RDPS_API_URL: http://api:3001
+      DEPLOYMENT_RUNNER_SIGNING_SECRET: ${DEPLOYMENT_RUNNER_SIGNING_SECRET:-rdps-local-deployment-runner-signing-secret}
+      DEPLOYMENT_TARGET_URL: http://sandbox-target:3081
+      DEPLOYMENT_TARGET_SIGNING_SECRET: ${DEPLOYMENT_TARGET_SIGNING_SECRET:-rdps-local-sandbox-target-signing-secret}
+      RUNNER_STATE_DIR: /var/lib/rdps/deployment-runner
+    volumes:
+      - rdps_dev_deployment_runner:/var/lib/rdps/deployment-runner
+    depends_on:
+      sandbox-target:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+  sandbox-target:
+    image: rdps-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: ["node", "scripts/dev-runner/sandbox-target.mjs"]
+    environment:
+      NODE_ENV: development
+      TARGET_HOST: "0.0.0.0"
+      TARGET_PORT: "3081"
+      RUNNER_STATE_DIR: /var/lib/rdps/sandbox-target
+      DEPLOYMENT_TARGET_SIGNING_SECRET: ${DEPLOYMENT_TARGET_SIGNING_SECRET:-rdps-local-sandbox-target-signing-secret}
+    volumes:
+      - rdps_dev_sandbox_target:/var/lib/rdps/sandbox-target
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3081/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+  admin-web:
+    image: rdps-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: ["pnpm", "--filter", "@rdps/admin-web", "dev"]
+    environment:
+      NODE_ENV: development
+    ports:
+      - "5173:5173"
+  public-web:
+    image: rdps-dev:local
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: ["pnpm", "--filter", "@rdps/public-web", "dev"]
+    environment:
+      NODE_ENV: development
+    ports:
+      - "5174:5174"
+volumes:
+  rdps_postgres_data:
+  rdps_redis_data:
+  rdps_dev_attachments:
+  rdps_dev_sandbox_target:
+  rdps_dev_deployment_runner:

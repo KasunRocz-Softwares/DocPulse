@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule RDPS encrypted off-site backups
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 UTC
+Persistent=true
+RandomizedDelaySec=15m
+AccuracySec=1m
+Unit=rdps-backup.service
+
+[Install]
+WantedBy=timers.target

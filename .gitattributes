@@ -1,0 +1,7 @@
+# Keep LF everywhere (matches .editorconfig and Prettier), regardless of
+# local core.autocrlf settings.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gz binary
+*.zst binary

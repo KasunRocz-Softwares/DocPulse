@@ -1,0 +1,22 @@
+node_modules/
+dist/
+coverage/
+.turbo/
+.env
+.env.*
+!.env.example
+.next/
+playwright-report/
+test-results/
+uploads/
+apps/api/src/generated/
+.idea/
+.vscode/
+*.log
+
+# Local-only data: database dumps, attachment backups, tool caches
+.tmp/
+.rdps-attachment-test.*/
+.codebase-memory/
+graphify-out/
+*.dump

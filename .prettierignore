@@ -1,0 +1,6 @@
+.codebase-memory/
+.tmp/
+**/node_modules/
+**/dist/
+apps/api/src/generated/
+coverage/

@@ -1,0 +1,836 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../../apps/api/src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum ProjectRole {
+  ADMIN
+  RELEASE_MANAGER
+  DEVELOPER
+  REVIEWER
+  CLIENT
+}
+
+enum ReleaseType {
+  MAJOR
+  MINOR
+  PATCH
+  HOTFIX
+}
+
+enum ReleaseChannel {
+  ALPHA
+  BETA
+  RC
+  STABLE
+}
+
+enum ReleaseStatus {
+  DRAFT
+  REVIEW
+  APPROVED
+  PUBLISHED
+  REJECTED
+  UNPUBLISHED
+  CANCELLED
+  ARCHIVED
+}
+
+enum ChangeCategory {
+  FEATURE
+  IMPROVEMENT
+  FIX
+  BREAKING_CHANGE
+  SECURITY
+  PERFORMANCE
+  DEPRECATION
+  OTHER
+}
+
+enum ChangeVisibility {
+  INTERNAL_ONLY
+  PUBLIC_CANDIDATE
+}
+
+enum ReleaseAudienceMode {
+  PUBLIC
+  CLIENTS
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUPERSEDED
+}
+
+enum EnvironmentName {
+  DEVELOPMENT
+  QA
+  STAGING
+  BETA
+  ENTERPRISE
+  CANARY
+  PRODUCTION
+}
+
+enum ScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  FAILED
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+  DEAD
+}
+
+enum NotificationDeliveryKind {
+  VERIFICATION
+  PUBLICATION
+}
+
+enum AnalyticsEventKind {
+  PROJECT_VIEW
+  RELEASE_VIEW
+}
+
+enum AnalyticsExportKind {
+  ANALYTICS_CSV
+  RELEASE_PDF
+}
+
+enum AnalyticsExportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum GitHubAppConnectionStatus {
+  ACTIVE
+  SUSPENDED
+  REMOVED
+}
+
+model User {
+  id                        String                     @id @default(uuid()) @db.Uuid
+  email                     String                     @unique @db.VarChar(320)
+  displayName               String                     @db.VarChar(160)
+  passwordHash              String?                    @db.VarChar(255)
+  status                    UserStatus                 @default(INVITED)
+  isSystemAdmin             Boolean                    @default(false)
+  identities                Identity[]
+  memberships               ProjectMember[]
+  sentInvitations           ProjectInvitation[]        @relation("ProjectInvitationSender")
+  authored                  ReleaseChange[]            @relation("ChangeAuthor")
+  decisions                 ApprovalDecision[]
+  auditEvents               AuditLog[]
+  analyticsExports          AnalyticsExportJob[]
+  deploymentTriggerRequests DeploymentTriggerRequest[]
+  sessions                  UserSession[]
+  githubAppInstallStates    GitHubAppInstallState[]
+  passwordResets            PasswordResetToken[]       @relation("PasswordResetUser")
+  issuedPasswordResets      PasswordResetToken[]       @relation("PasswordResetIssuer")
+  createdAt                 DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime                   @updatedAt @db.Timestamptz(6)
+
+  @@index([status])
+}
+
+model UserSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  refreshTokenHash String    @unique @db.Char(64)
+  expiresAt        DateTime  @db.Timestamptz(6)
+  revokedAt        DateTime? @db.Timestamptz(6)
+  lastUsedAt       DateTime? @db.Timestamptz(6)
+  ipAddressHash    String?   @db.Char(64)
+  userAgent        String?   @db.VarChar(400)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([userId, revokedAt, expiresAt])
+  @@index([expiresAt])
+}
+
+model LoginAttempt {
+  identifierHash  String    @id @db.Char(64)
+  windowStartedAt DateTime  @db.Timestamptz(6)
+  failureCount    Int       @default(0)
+  blockedUntil    DateTime? @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(6)
+
+  @@index([blockedUntil])
+}
+
+model Identity {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @db.Uuid
+  provider        String   @db.VarChar(80)
+  providerSubject String   @db.VarChar(255)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([provider, providerSubject])
+  @@index([userId])
+}
+
+model Project {
+  id                        String                       @id @default(uuid()) @db.Uuid
+  name                      String                       @db.VarChar(160)
+  slug                      String                       @unique @db.VarChar(80)
+  description               String?                      @db.Text
+  logoUrl                   String?
+  status                    ProjectStatus                @default(ACTIVE)
+  members                   ProjectMember[]
+  clientAudiences           ClientAudience[]
+  invitations               ProjectInvitation[]
+  repositories              ProjectRepository[]
+  githubAppConnections      GitHubAppProjectConnection[]
+  githubAppInstallStates    GitHubAppInstallState[]
+  integrationSuggestions    IntegrationSuggestion[]
+  releases                  Release[]
+  environments              ProjectEnvironment[]
+  branding                  ProjectBrand?
+  subscriptions             Subscription[]
+  notificationDeliveries    NotificationDelivery[]
+  analyticsEvents           AnalyticsEvent[]
+  analyticsExports          AnalyticsExportJob[]
+  deploymentTriggerRequests DeploymentTriggerRequest[]
+  auditEvents               AuditLog[]
+  createdAt                 DateTime                     @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime                     @updatedAt @db.Timestamptz(6)
+
+  @@index([status, name])
+}
+
+model ProjectMember {
+  id               String          @id @default(uuid()) @db.Uuid
+  projectId        String          @db.Uuid
+  userId           String          @db.Uuid
+  role             ProjectRole
+  clientAudienceId String?         @db.Uuid
+  project          Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientAudience   ClientAudience? @relation(fields: [clientAudienceId], references: [id], onDelete: SetNull)
+  createdAt        DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime        @updatedAt @db.Timestamptz(6)
+
+  @@unique([projectId, userId])
+  @@index([userId, role])
+}
+
+model ClientAudience {
+  id        String                         @id @default(uuid()) @db.Uuid
+  projectId String                         @db.Uuid
+  name      String                         @db.VarChar(120)
+  slug      String                         @db.VarChar(80)
+  project   Project                        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  members   ProjectMember[]
+  releases  ReleaseClientAudience[]
+  snapshots PublicSnapshotClientAudience[]
+  createdAt DateTime                       @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime                       @updatedAt @db.Timestamptz(6)
+
+  @@unique([projectId, slug])
+  @@index([projectId, name])
+}
+
+/// One-time password set/reset link issued by a system administrator.
+model PasswordResetToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  tokenHash   String    @unique @db.Char(64)
+  expiresAt   DateTime  @db.Timestamptz(6)
+  usedAt      DateTime? @db.Timestamptz(6)
+  revokedAt   DateTime? @db.Timestamptz(6)
+  createdById String?   @db.Uuid
+  user        User      @relation("PasswordResetUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy   User?     @relation("PasswordResetIssuer", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([userId, usedAt])
+  @@index([expiresAt])
+}
+
+model ProjectInvitation {
+  id          String      @id @default(uuid()) @db.Uuid
+  projectId   String      @db.Uuid
+  email       String      @db.VarChar(320)
+  role        ProjectRole
+  tokenHash   String      @unique @db.Char(64)
+  expiresAt   DateTime    @db.Timestamptz(6)
+  acceptedAt  DateTime?   @db.Timestamptz(6)
+  revokedAt   DateTime?   @db.Timestamptz(6)
+  invitedById String?     @db.Uuid
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  invitedBy   User?       @relation("ProjectInvitationSender", fields: [invitedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(6)
+
+  @@index([projectId, email, acceptedAt])
+  @@index([expiresAt])
+}
+
+model ProjectRepository {
+  id                   String   @id @default(uuid()) @db.Uuid
+  projectId            String   @db.Uuid
+  provider             String   @default("github") @db.VarChar(40)
+  owner                String   @db.VarChar(120)
+  name                 String   @db.VarChar(160)
+  externalId           String?  @db.VarChar(160)
+  githubInstallationId String?  @db.VarChar(40)
+  project              Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt            DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([projectId, provider, owner, name])
+  @@index([provider, externalId])
+}
+
+model GitHubAppProjectConnection {
+  id             String                    @id @default(uuid()) @db.Uuid
+  projectId      String                    @db.Uuid
+  installationId String                    @db.VarChar(40)
+  accountLogin   String                    @db.VarChar(120)
+  accountType    String                    @db.VarChar(40)
+  status         GitHubAppConnectionStatus @default(ACTIVE)
+  disconnectedAt DateTime?                 @db.Timestamptz(6)
+  project        Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt      DateTime                  @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime                  @updatedAt @db.Timestamptz(6)
+
+  @@unique([projectId, installationId])
+  @@index([installationId, status])
+  @@index([projectId, status])
+}
+
+model GitHubAppInstallState {
+  stateHash  String    @id @db.Char(64)
+  projectId  String    @db.Uuid
+  userId     String    @db.Uuid
+  expiresAt  DateTime  @db.Timestamptz(6)
+  consumedAt DateTime? @db.Timestamptz(6)
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([expiresAt])
+}
+
+model GitHubAppWebhookDelivery {
+  deliveryId  String   @id @db.VarChar(255)
+  payloadHash String   @db.Char(64)
+  eventType   String   @db.VarChar(120)
+  receivedAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([receivedAt])
+}
+
+model ProjectEnvironment {
+  id                                String                     @id @default(uuid()) @db.Uuid
+  projectId                         String                     @db.Uuid
+  name                              EnvironmentName
+  label                             String                     @db.VarChar(80)
+  enabled                           Boolean                    @default(true)
+  deploymentTriggerEnabled          Boolean                    @default(false)
+  deploymentRequiresApprovedRelease Boolean                    @default(true)
+  project                           Project                    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  releases                          ReleaseDeployment[]
+  triggerRequests                   DeploymentTriggerRequest[]
+
+  @@unique([projectId, name])
+}
+
+model ProjectBrand {
+  id            String   @id @default(uuid()) @db.Uuid
+  projectId     String   @unique @db.Uuid
+  primaryColor  String   @default("#2457C5") @db.VarChar(16)
+  accentColor   String?  @db.VarChar(16)
+  logoUrl       String?
+  customDomain  String?  @unique @db.VarChar(255)
+  defaultLocale String   @default("en") @db.VarChar(255)
+  settings      Json     @default("{}")
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(6)
+}
+
+model Release {
+  id                        String                     @id @default(uuid()) @db.Uuid
+  projectId                 String                     @db.Uuid
+  version                   String                     @db.VarChar(64)
+  title                     String                     @db.VarChar(200)
+  type                      ReleaseType
+  channel                   ReleaseChannel             @default(STABLE)
+  status                    ReleaseStatus              @default(DRAFT)
+  releaseDate               DateTime?                  @db.Timestamptz(6)
+  internalSummary           String?                    @db.Text
+  publicSummary             String?                    @db.Text
+  project                   Project                    @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  changes                   ReleaseChange[]
+  translations              ReleaseTranslation[]
+  documents                 ReleaseDocument[]
+  attachments               ReleaseAttachment[]
+  deployments               ReleaseDeployment[]
+  deploymentTriggerRequests DeploymentTriggerRequest[]
+  publications              ReleasePublication[]
+  subscriptions             Subscription[]
+  audienceMode              ReleaseAudienceMode        @default(PUBLIC)
+  clientAudiences           ReleaseClientAudience[]
+  approvals                 ApprovalRevision[]
+  gitReferences             GitReference[]
+  createdAt                 DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt                 DateTime                   @updatedAt @db.Timestamptz(6)
+
+  @@unique([projectId, version, channel])
+  @@index([projectId, status, releaseDate(sort: Desc)])
+}
+
+model ReleaseClientAudience {
+  releaseId  String         @db.Uuid
+  audienceId String         @db.Uuid
+  release    Release        @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  audience   ClientAudience @relation(fields: [audienceId], references: [id], onDelete: Restrict)
+  createdAt  DateTime       @default(now()) @db.Timestamptz(6)
+
+  @@id([releaseId, audienceId])
+  @@index([audienceId, releaseId])
+}
+
+model ReleaseChange {
+  id                  String                     @id @default(uuid()) @db.Uuid
+  releaseId           String                     @db.Uuid
+  title               String                     @db.VarChar(240)
+  category            ChangeCategory
+  internalDescription String                     @db.Text
+  publicDescription   String?                    @db.Text
+  visibility          ChangeVisibility           @default(INTERNAL_ONLY)
+  sortOrder           Int                        @default(0)
+  authorId            String                     @db.Uuid
+  release             Release                    @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  author              User                       @relation("ChangeAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  references          GitReference[]
+  translations        ReleaseChangeTranslation[]
+  createdAt           DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime                   @updatedAt @db.Timestamptz(6)
+
+  @@index([releaseId, sortOrder])
+  @@index([releaseId, category, visibility])
+}
+
+model ReleaseTranslation {
+  id        String                     @id @default(uuid()) @db.Uuid
+  releaseId String                     @db.Uuid
+  locale    String                     @db.VarChar(16)
+  title     String                     @db.VarChar(200)
+  summary   String?                    @db.Text
+  release   Release                    @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  changes   ReleaseChangeTranslation[]
+  createdAt DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime                   @updatedAt @db.Timestamptz(6)
+
+  @@unique([releaseId, locale])
+  @@index([releaseId, locale])
+}
+
+model ReleaseChangeTranslation {
+  id            String             @id @default(uuid()) @db.Uuid
+  translationId String             @db.Uuid
+  changeId      String             @db.Uuid
+  description   String             @db.Text
+  translation   ReleaseTranslation @relation(fields: [translationId], references: [id], onDelete: Cascade)
+  change        ReleaseChange      @relation(fields: [changeId], references: [id], onDelete: Cascade)
+  createdAt     DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime           @updatedAt @db.Timestamptz(6)
+
+  @@unique([translationId, changeId])
+  @@index([changeId])
+}
+
+model ReleaseDocument {
+  id        String   @id @default(uuid()) @db.Uuid
+  releaseId String   @db.Uuid
+  section   String   @db.VarChar(120)
+  title     String   @db.VarChar(240)
+  content   Json
+  sortOrder Int      @default(0)
+  release   Release  @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  @@index([releaseId, sortOrder])
+}
+
+model ReleaseAttachment {
+  id             String     @id @default(uuid()) @db.Uuid
+  releaseId      String     @db.Uuid
+  storageKey     String     @unique @db.VarChar(512)
+  fileName       String     @db.VarChar(255)
+  contentType    String     @db.VarChar(160)
+  sizeBytes      BigInt
+  checksumSha256 String     @db.VarChar(64)
+  scanStatus     ScanStatus @default(PENDING)
+  publicAllowed  Boolean    @default(false)
+  release        Release    @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  createdAt      DateTime   @default(now()) @db.Timestamptz(6)
+
+  @@index([releaseId, scanStatus])
+}
+
+model ApprovalRevision {
+  id            String              @id @default(uuid()) @db.Uuid
+  releaseId     String              @db.Uuid
+  revision      Int
+  status        ApprovalStatus      @default(PENDING)
+  contentHash   String              @db.VarChar(64)
+  content       Json
+  submittedById String              @db.Uuid
+  release       Release             @relation(fields: [releaseId], references: [id], onDelete: Restrict)
+  decisions     ApprovalDecision[]
+  publication   ReleasePublication?
+  createdAt     DateTime            @default(now()) @db.Timestamptz(6)
+
+  @@unique([releaseId, revision])
+  @@index([releaseId, status])
+}
+
+model ApprovalDecision {
+  id         String           @id @default(uuid()) @db.Uuid
+  revisionId String           @db.Uuid
+  reviewerId String           @db.Uuid
+  status     ApprovalStatus
+  comment    String?          @db.Text
+  revision   ApprovalRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  reviewer   User             @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+  createdAt  DateTime         @default(now()) @db.Timestamptz(6)
+
+  @@index([revisionId, status])
+}
+
+model ReleasePublication {
+  id          String                 @id @default(uuid()) @db.Uuid
+  releaseId   String                 @db.Uuid
+  revisionId  String                 @unique @db.Uuid
+  sequence    Int
+  publishedAt DateTime               @default(now()) @db.Timestamptz(6)
+  revokedAt   DateTime?              @db.Timestamptz(6)
+  release     Release                @relation(fields: [releaseId], references: [id], onDelete: Restrict)
+  revision    ApprovalRevision       @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  snapshot    PublicReleaseSnapshot?
+
+  @@unique([releaseId, sequence])
+  @@index([releaseId, revokedAt, publishedAt(sort: Desc)])
+}
+
+model PublicReleaseSnapshot {
+  id                     String                         @id @default(uuid()) @db.Uuid
+  publicationId          String                         @unique @db.Uuid
+  projectSlug            String                         @db.VarChar(80)
+  projectName            String                         @db.VarChar(160)
+  version                String                         @db.VarChar(64)
+  title                  String                         @db.VarChar(200)
+  summary                String?                        @db.Text
+  primaryColor           String                         @default("#2457c5") @db.VarChar(16)
+  accentColor            String?                        @db.VarChar(16)
+  logoUrl                String?
+  locale                 String                         @default("en") @db.VarChar(255)
+  defaultLocale          String                         @default("en") @db.VarChar(255)
+  contentHash            String                         @db.VarChar(64)
+  publishedAt            DateTime                       @db.Timestamptz(6)
+  publication            ReleasePublication             @relation(fields: [publicationId], references: [id], onDelete: Restrict)
+  changes                PublicSnapshotChange[]
+  locales                PublicSnapshotLocale[]
+  attachments            PublicSnapshotAttachment[]
+  audienceMode           ReleaseAudienceMode            @default(PUBLIC)
+  clientAudiences        PublicSnapshotClientAudience[]
+  notificationDeliveries NotificationDelivery[]
+  analyticsEvents        AnalyticsEvent[]
+  createdAt              DateTime                       @default(now()) @db.Timestamptz(6)
+
+  @@index([projectSlug, version])
+  @@index([projectSlug, publishedAt(sort: Desc)])
+  @@index([projectSlug, audienceMode, version, publishedAt(sort: Desc)])
+  @@index([projectSlug, audienceMode, publishedAt(sort: Desc)])
+}
+
+model PublicSnapshotLocale {
+  id         String                       @id @default(uuid()) @db.Uuid
+  snapshotId String                       @db.Uuid
+  locale     String                       @db.VarChar(255)
+  title      String                       @db.VarChar(200)
+  summary    String?                      @db.Text
+  snapshot   PublicReleaseSnapshot        @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  changes    PublicSnapshotChangeLocale[]
+  createdAt  DateTime                     @default(now()) @db.Timestamptz(6)
+
+  @@unique([snapshotId, locale])
+  @@index([locale, snapshotId])
+}
+
+model PublicSnapshotChangeLocale {
+  id               String               @id @default(uuid()) @db.Uuid
+  localeId         String               @db.Uuid
+  snapshotChangeId String               @db.Uuid
+  description      String               @db.Text
+  locale           PublicSnapshotLocale @relation(fields: [localeId], references: [id], onDelete: Restrict)
+  snapshotChange   PublicSnapshotChange @relation(fields: [snapshotChangeId], references: [id], onDelete: Restrict)
+  createdAt        DateTime             @default(now()) @db.Timestamptz(6)
+
+  @@unique([localeId, snapshotChangeId])
+  @@index([localeId])
+}
+
+model PublicSnapshotClientAudience {
+  snapshotId String                @db.Uuid
+  audienceId String                @db.Uuid
+  snapshot   PublicReleaseSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  audience   ClientAudience        @relation(fields: [audienceId], references: [id], onDelete: Restrict)
+  createdAt  DateTime              @default(now()) @db.Timestamptz(6)
+
+  @@id([snapshotId, audienceId])
+  @@index([audienceId, snapshotId])
+}
+
+model PublicSnapshotAttachment {
+  id                 String                @id @default(uuid()) @db.Uuid
+  snapshotId         String                @db.Uuid
+  sourceAttachmentId String                @db.Uuid
+  storageKey         String                @db.VarChar(512)
+  fileName           String                @db.VarChar(255)
+  contentType        String                @db.VarChar(160)
+  sizeBytes          BigInt
+  checksumSha256     String                @db.VarChar(64)
+  snapshot           PublicReleaseSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  createdAt          DateTime              @default(now()) @db.Timestamptz(6)
+
+  @@unique([snapshotId, sourceAttachmentId])
+  @@index([snapshotId, fileName])
+}
+
+model PublicSnapshotChange {
+  id             String                       @id @default(uuid()) @db.Uuid
+  snapshotId     String                       @db.Uuid
+  sourceChangeId String?                      @db.Uuid
+  title          String                       @db.VarChar(240)
+  category       ChangeCategory
+  description    String                       @db.Text
+  sortOrder      Int                          @default(0)
+  snapshot       PublicReleaseSnapshot        @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  locales        PublicSnapshotChangeLocale[]
+
+  @@index([snapshotId, sortOrder])
+}
+
+model ReleaseDeployment {
+  id            String             @id @default(uuid()) @db.Uuid
+  releaseId     String             @db.Uuid
+  environmentId String             @db.Uuid
+  externalId    String?            @db.VarChar(255)
+  status        String             @db.VarChar(40)
+  deployedAt    DateTime?          @db.Timestamptz(6)
+  metadata      Json               @default("{}")
+  release       Release            @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  environment   ProjectEnvironment @relation(fields: [environmentId], references: [id], onDelete: Restrict)
+  createdAt     DateTime           @default(now()) @db.Timestamptz(6)
+
+  @@unique([externalId])
+  @@index([releaseId, deployedAt(sort: Desc)])
+  @@index([environmentId, status])
+}
+
+model DeploymentTriggerRequest {
+  id                 String             @id @default(uuid()) @db.Uuid
+  projectId          String             @db.Uuid
+  releaseId          String             @db.Uuid
+  environmentId      String             @db.Uuid
+  requestedById      String             @db.Uuid
+  idempotencyKey     String             @db.VarChar(120)
+  requestHash        String             @db.Char(64)
+  reason             String?            @db.VarChar(500)
+  status             String             @default("REQUESTED") @db.VarChar(24)
+  resultCode         String?            @db.VarChar(80)
+  resultSummary      String?            @db.VarChar(500)
+  requestedAt        DateTime           @default(now()) @db.Timestamptz(6)
+  dispatchEnqueuedAt DateTime?          @db.Timestamptz(6)
+  startedAt          DateTime?          @db.Timestamptz(6)
+  completedAt        DateTime?          @db.Timestamptz(6)
+  createdAt          DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @db.Timestamptz(6)
+  project            Project            @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  release            Release            @relation(fields: [releaseId], references: [id], onDelete: Restrict)
+  environment        ProjectEnvironment @relation(fields: [environmentId], references: [id], onDelete: Restrict)
+  requestedBy        User               @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@unique([projectId, idempotencyKey])
+  @@index([projectId, createdAt(sort: Desc)])
+  @@index([environmentId, status, createdAt])
+  @@index([releaseId, createdAt(sort: Desc)])
+}
+
+model GitReference {
+  id         String         @id @default(uuid()) @db.Uuid
+  releaseId  String         @db.Uuid
+  changeId   String?        @db.Uuid
+  repository String         @db.VarChar(280)
+  kind       String         @db.VarChar(24)
+  externalId String         @db.VarChar(160)
+  url        String         @db.VarChar(2048)
+  title      String?        @db.VarChar(500)
+  release    Release        @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  change     ReleaseChange? @relation(fields: [changeId], references: [id], onDelete: Cascade)
+
+  @@unique([repository, kind, externalId, releaseId])
+  @@index([releaseId])
+}
+
+model WebhookEvent {
+  id          String                 @id @default(uuid()) @db.Uuid
+  provider    String                 @db.VarChar(40)
+  deliveryId  String                 @db.VarChar(255)
+  eventType   String                 @db.VarChar(120)
+  payloadHash String                 @db.VarChar(64)
+  status      String                 @default("RECEIVED") @db.VarChar(32)
+  receivedAt  DateTime               @default(now()) @db.Timestamptz(6)
+  processedAt DateTime?              @db.Timestamptz(6)
+  suggestion  IntegrationSuggestion?
+
+  @@unique([provider, deliveryId])
+  @@unique([provider, payloadHash])
+  @@index([status, receivedAt])
+}
+
+model IntegrationSuggestion {
+  id             String       @id @default(uuid()) @db.Uuid
+  projectId      String?      @db.Uuid
+  webhookEventId String       @unique @db.Uuid
+  repository     String       @db.VarChar(280)
+  referenceKind  String       @db.VarChar(24)
+  externalId     String       @db.VarChar(160)
+  revision       String?      @db.VarChar(160)
+  action         String       @db.VarChar(80)
+  status         String       @default("PENDING") @db.VarChar(32)
+  project        Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  webhookEvent   WebhookEvent @relation(fields: [webhookEventId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
+  reviewedAt     DateTime?    @db.Timestamptz(6)
+
+  @@index([projectId, status, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+}
+
+model Subscription {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  email                 String                 @db.VarChar(320)
+  projectId             String                 @db.Uuid
+  releaseId             String?                @db.Uuid
+  locale                String                 @default("en") @db.VarChar(255)
+  preferences           Json                   @default("{\"newReleases\":true,\"securityOnly\":false}")
+  verificationTokenHash String?                @unique @db.Char(64)
+  unsubscribeTokenHash  String                 @unique @db.Char(64)
+  verifiedAt            DateTime?              @db.Timestamptz(6)
+  unsubscribedAt        DateTime?              @db.Timestamptz(6)
+  project               Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  release               Release?               @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  deliveries            NotificationDelivery[]
+  createdAt             DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime               @updatedAt @db.Timestamptz(6)
+
+  // The migration adds a partial unique index for project-wide rows (releaseId IS NULL).
+  @@unique([email, projectId, releaseId])
+  @@index([projectId, verifiedAt, unsubscribedAt])
+  @@index([releaseId, verifiedAt, unsubscribedAt])
+}
+
+model NotificationDelivery {
+  id                   String                     @id @default(uuid()) @db.Uuid
+  projectId            String                     @db.Uuid
+  subscriptionId       String                     @db.Uuid
+  publicationId        String?                    @db.Uuid
+  unsubscribeTokenHash String?                    @unique @db.Char(64)
+  kind                 NotificationDeliveryKind
+  status               NotificationDeliveryStatus @default(PENDING)
+  attemptCount         Int                        @default(0)
+  nextAttemptAt        DateTime                   @default(now()) @db.Timestamptz(6)
+  sentAt               DateTime?                  @db.Timestamptz(6)
+  lastErrorCode        String?                    @db.VarChar(80)
+  payload              Json                       @default("{}")
+  project              Project                    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subscription         Subscription               @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  snapshot             PublicReleaseSnapshot?     @relation(fields: [publicationId], references: [id], onDelete: SetNull)
+  createdAt            DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime                   @updatedAt @db.Timestamptz(6)
+
+  @@unique([subscriptionId, publicationId, kind])
+  @@index([status, nextAttemptAt])
+  @@index([projectId, createdAt(sort: Desc)])
+}
+
+model AnalyticsEvent {
+  id         String                 @id @default(uuid()) @db.Uuid
+  projectId  String                 @db.Uuid
+  snapshotId String?                @db.Uuid
+  kind       AnalyticsEventKind
+  occurredOn DateTime               @db.Date
+  project    Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  snapshot   PublicReleaseSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
+  createdAt  DateTime               @default(now()) @db.Timestamptz(6)
+
+  @@index([projectId, occurredOn, kind])
+  @@index([snapshotId, kind])
+}
+
+model AnalyticsExportJob {
+  id            String                @id @default(uuid()) @db.Uuid
+  projectId     String                @db.Uuid
+  requestedById String                @db.Uuid
+  kind          AnalyticsExportKind
+  status        AnalyticsExportStatus @default(PENDING)
+  filename      String                @db.VarChar(255)
+  contentType   String?               @db.VarChar(120)
+  artifact      Bytes?                @db.ByteA
+  requestData   Json                  @default("{}")
+  errorCode     String?               @db.VarChar(80)
+  completedAt   DateTime?             @db.Timestamptz(6)
+  project       Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requestedBy   User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  createdAt     DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime              @updatedAt @db.Timestamptz(6)
+
+  @@index([projectId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @db.Uuid
+  projectId  String?  @db.Uuid
+  action     String   @db.VarChar(120)
+  entityType String   @db.VarChar(80)
+  entityId   String?  @db.Uuid
+  metadata   Json     @default("{}")
+  requestId  String?  @db.VarChar(120)
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([projectId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@index([entityType, entityId])
+}

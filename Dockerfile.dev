@@ -1,0 +1,24 @@
+FROM node:24-bookworm-slim
+
+ENV COREPACK_HOME=/opt/corepack
+WORKDIR /workspace
+
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@11.25.0 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/admin-web/package.json ./apps/admin-web/package.json
+COPY apps/api/package.json ./apps/api/package.json
+COPY apps/public-web/package.json ./apps/public-web/package.json
+COPY apps/worker/package.json ./apps/worker/package.json
+COPY packages/auth/package.json ./packages/auth/package.json
+COPY packages/config/package.json ./packages/config/package.json
+COPY packages/public-model/package.json ./packages/public-model/package.json
+COPY packages/types/package.json ./packages/types/package.json
+COPY packages/ui/package.json ./packages/ui/package.json
+COPY packages/validation/package.json ./packages/validation/package.json
+RUN pnpm install --frozen-lockfile
+COPY . .
+
+EXPOSE 3001 5173 5174

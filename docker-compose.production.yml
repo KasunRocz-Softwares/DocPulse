@@ -1,0 +1,326 @@
+name: rdps-production
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE to the approved sha256 digest}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the secret manager}
+    volumes:
+      - rdps_production_postgres_data:/var/lib/postgresql/data
+    networks: [private]
+    healthcheck:
+      test:
+        ["CMD-SHELL", 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    security_opt: [no-new-privileges:true]
+
+  redis:
+    image: ${REDIS_IMAGE:?set REDIS_IMAGE to the approved sha256 digest}
+    restart: unless-stopped
+    command:
+      [
+        "sh",
+        "-c",
+        'exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"',
+      ]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the secret manager}
+    volumes:
+      - rdps_production_redis_data:/data
+    networks: [private]
+    healthcheck:
+      test:
+        ["CMD-SHELL", 'redis-cli -a "$${REDIS_PASSWORD}" ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+
+  clamav:
+    # Production preflight requires an approved immutable digest reference.
+    image: ${CLAMAV_IMAGE:?set CLAMAV_IMAGE to the approved sha256 digest}
+    restart: unless-stopped
+    environment:
+      # The official image includes signatures. Updates are delivered through
+      # a reviewed image refresh because this service has no network egress.
+      CLAMAV_NO_FRESHCLAMD: "true"
+      CLAMAV_NO_MILTERD: "true"
+    networks: [private]
+    mem_limit: ${CLAMAV_MEM_LIMIT:-2g}
+    cpus: ${CLAMAV_CPUS:-1.0}
+    healthcheck:
+      # The official image ships a ClamD protocol health check on port 3310.
+      test: ["CMD", "clamdscan", "--ping=1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 3m
+    security_opt: [no-new-privileges:true]
+
+  migrate:
+    image: ${RDPS_MIGRATE_IMAGE:-rdps-migrate:${RDPS_IMAGE_TAG:?set RDPS_IMAGE_TAG to a unique release tag}}
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      target: migrate
+    command: ["pnpm", "--filter", "@rdps/api", "db:deploy"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL from the secret manager}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [private]
+    restart: "no"
+    profiles: [release]
+
+  api:
+    image: ${RDPS_API_IMAGE:-rdps-api:${RDPS_IMAGE_TAG:?set RDPS_IMAGE_TAG to a unique release tag}}
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      target: api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PORT: "3001"
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL from the secret manager}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL from the secret manager}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET in the secret manager}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
+      BOOTSTRAP_SECRET: ${BOOTSTRAP_SECRET:?set BOOTSTRAP_SECRET in the secret manager}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set GITHUB_WEBHOOK_SECRET in the secret manager}
+      GITHUB_APP_WEBHOOK_SECRET: ${GITHUB_APP_WEBHOOK_SECRET:-}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_APP_ADMIN_ORIGIN: ${GITHUB_APP_ADMIN_ORIGIN:-}
+      DEPLOYMENT_WEBHOOK_SECRET: ${DEPLOYMENT_WEBHOOK_SECRET:?set DEPLOYMENT_WEBHOOK_SECRET in the secret manager}
+      DEPLOYMENT_RUNNER_SIGNING_SECRET: ${DEPLOYMENT_RUNNER_SIGNING_SECRET:-}
+      RDPS_WORKER_SHARED_SECRET: ${RDPS_WORKER_SHARED_SECRET:?set RDPS_WORKER_SHARED_SECRET in the secret manager}
+      NOTIFICATION_WORKER_SECRET: ${NOTIFICATION_WORKER_SECRET:?set NOTIFICATION_WORKER_SECRET in the secret manager}
+      RDPS_UPLOAD_DIR: /var/lib/rdps/uploads
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      WEB_BASE_URL: ${WEB_BASE_URL:?set WEB_BASE_URL}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_CALLBACK_URL: ${OIDC_CALLBACK_URL:-}
+      OIDC_STATE_SECRET: ${OIDC_STATE_SECRET:-}
+      RDPS_API_PUBLIC_ORIGIN: ${RDPS_API_PUBLIC_ORIGIN:-}
+      RDPS_OIDC_ADMIN_ORIGIN: ${RDPS_OIDC_ADMIN_ORIGIN:-}
+      OIDC_AUTO_PROVISION: ${OIDC_AUTO_PROVISION:-false}
+      EMAIL_DELIVERY_URL: ${EMAIL_DELIVERY_URL:-}
+      EMAIL_DELIVERY_TOKEN: ${EMAIL_DELIVERY_TOKEN:-}
+      AI_SUMMARY_PROVIDER_URL: ${AI_SUMMARY_PROVIDER_URL:-}
+      AI_SUMMARY_MODEL: ${AI_SUMMARY_MODEL:-}
+      AI_SUMMARY_PROVIDER_API_KEY: ${AI_SUMMARY_PROVIDER_API_KEY:-}
+      AI_SUMMARY_TIMEOUT_MS: ${AI_SUMMARY_TIMEOUT_MS:-12000}
+      PUBLIC_API_RATE_LIMIT: ${PUBLIC_API_RATE_LIMIT:-120}
+      PUBLIC_API_RATE_WINDOW_SECONDS: ${PUBLIC_API_RATE_WINDOW_SECONDS:-60}
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+      CLAMAV_HOST: ${CLAMAV_HOST:-clamav}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+    expose: ["3001"]
+    volumes:
+      - rdps_production_attachments:/var/lib/rdps/uploads
+    networks: [private, monitoring, egress]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3001/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    security_opt: [no-new-privileges:true]
+
+  worker:
+    image: ${RDPS_WORKER_IMAGE:-rdps-worker:${RDPS_IMAGE_TAG:?set RDPS_IMAGE_TAG to a unique release tag}}
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      target: worker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL from the secret manager}
+      RDPS_API_URL: http://api:3001
+      RDPS_WORKER_SHARED_SECRET: ${RDPS_WORKER_SHARED_SECRET:?set RDPS_WORKER_SHARED_SECRET in the secret manager}
+      NOTIFICATION_WORKER_SECRET: ${NOTIFICATION_WORKER_SECRET:?set NOTIFICATION_WORKER_SECRET in the secret manager}
+      DEPLOYMENT_RUNNER_URL: ${DEPLOYMENT_RUNNER_URL:-}
+      DEPLOYMENT_RUNNER_SIGNING_SECRET: ${DEPLOYMENT_RUNNER_SIGNING_SECRET:-}
+      EMAIL_DELIVERY_URL: ${EMAIL_DELIVERY_URL:-}
+      EMAIL_DELIVERY_TOKEN: ${EMAIL_DELIVERY_TOKEN:-}
+    networks: [private, egress]
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e ''const Redis = require("ioredis"); const client = new Redis(process.env.REDIS_URL, { lazyConnect: true, connectTimeout: 3000, maxRetriesPerRequest: 1 }); client.connect().then(() => client.ping()).then((result) => { client.disconnect(); process.exit(result === "PONG" ? 0 : 1); }).catch(() => { client.disconnect(); process.exit(1); });''',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    security_opt: [no-new-privileges:true]
+
+  web:
+    image: ${RDPS_WEB_IMAGE:-rdps-web:${RDPS_IMAGE_TAG:?set RDPS_IMAGE_TAG to a unique release tag}}
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      target: web
+    restart: unless-stopped
+    expose: ["8080"]
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+    networks: [private, edge, monitoring]
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:?set PROMETHEUS_IMAGE to the approved sha256 digest}
+    restart: unless-stopped
+    command:
+      [
+        "--config.file=/etc/prometheus/prometheus.yml",
+        "--storage.tsdb.path=/prometheus",
+        "--storage.tsdb.retention.time=15d",
+        "--web.enable-lifecycle",
+      ]
+    volumes:
+      - ./scripts/ops/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./scripts/ops/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - rdps_production_prometheus_data:/prometheus
+    networks: [monitoring, private]
+    depends_on:
+      - alertmanager
+      - postgres-exporter
+      - redis-exporter
+      - blackbox-exporter
+      - node-exporter
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt: [no-new-privileges:true]
+
+  alertmanager:
+    image: ${RDPS_ALERTMANAGER_IMAGE:-rdps-alertmanager:${RDPS_IMAGE_TAG:?set RDPS_IMAGE_TAG to a unique release tag}}
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      target: alertmanager
+    restart: unless-stopped
+    environment:
+      RDPS_ALERT_WEBHOOK_URL: ${RDPS_ALERT_WEBHOOK_URL:?set RDPS_ALERT_WEBHOOK_URL to the production paging or alert endpoint}
+    volumes:
+      - rdps_production_alertmanager_data:/alertmanager
+    networks: [monitoring, egress]
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9093/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt: [no-new-privileges:true]
+
+  postgres-exporter:
+    image: ${POSTGRES_EXPORTER_IMAGE:?set POSTGRES_EXPORTER_IMAGE to the approved sha256 digest}
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB:?set POSTGRES_DB}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_EXPORTER_USER:?set POSTGRES_EXPORTER_USER}
+      DATA_SOURCE_PASS: ${POSTGRES_EXPORTER_PASSWORD:?set POSTGRES_EXPORTER_PASSWORD in the secret manager}
+    networks: [private, monitoring]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt: [no-new-privileges:true]
+
+  redis-exporter:
+    image: ${REDIS_EXPORTER_IMAGE:?set REDIS_EXPORTER_IMAGE to the approved sha256 digest}
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in the secret manager}
+    networks: [private, monitoring]
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt: [no-new-privileges:true]
+
+  blackbox-exporter:
+    image: ${BLACKBOX_EXPORTER_IMAGE:?set BLACKBOX_EXPORTER_IMAGE to the approved sha256 digest}
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./scripts/ops/monitoring/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    networks: [monitoring, private, egress]
+    security_opt: [no-new-privileges:true]
+
+  node-exporter:
+    image: ${NODE_EXPORTER_IMAGE:?set NODE_EXPORTER_IMAGE to the approved sha256 digest}
+    restart: unless-stopped
+    command:
+      [
+        "--path.rootfs=/host",
+        "--path.procfs=/host/proc",
+        "--path.sysfs=/host/sys",
+        "--collector.textfile.directory=/host/var/lib/node_exporter/textfile_collector",
+        "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+)($$|/)",
+      ]
+    volumes:
+      - "/:/host:ro,rslave"
+    networks: [monitoring]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  rdps_production_postgres_data:
+  rdps_production_redis_data:
+  rdps_production_attachments:
+    name: ${RDPS_ATTACHMENTS_VOLUME_NAME:-rdps-production-attachments}
+  rdps_production_prometheus_data:
+  rdps_production_alertmanager_data:
+
+networks:
+  private:
+    internal: true
+  edge:
+  monitoring:
+    internal: true
+  egress:
