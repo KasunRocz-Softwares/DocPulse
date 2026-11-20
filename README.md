@@ -53,6 +53,21 @@ Unmatched GitHub references are stored as `IntegrationSuggestion` records. Proje
 
 Publication snapshots are created transactionally by the publishing workflow from the approved revision, including frozen branding, locale, and public content. Database triggers reject snapshot mutation and deletion. Public pages and API reads use published snapshots only; unpublishing revokes access to the corresponding snapshot.
 
+## Self-host with Docker (published images)
+
+No clone needed. The images are published to GitHub Container Registry by the [Containers workflow](.github/workflows/containers.yml):
+`ghcr.io/kasunrocz-softwares/docpulse-api`, `-worker`, `-web` and `-migrate`.
+
+```sh
+mkdir docpulse && cd docpulse
+curl -fsSLO https://raw.githubusercontent.com/KasunRocz-Softwares/DocPulse/main/deploy/docker-compose.yml
+curl -fsSL -o .env https://raw.githubusercontent.com/KasunRocz-Softwares/DocPulse/main/deploy/env.example
+# Fill in POSTGRES_PASSWORD and the six secrets in .env (openssl rand -hex 32 for each)
+docker compose up -d
+```
+
+Release pages: <http://localhost:8080>. Admin portal: <http://admin.localhost:8080>. Choose **Create its first admin** and enter your `BOOTSTRAP_SECRET`. See [deploy/env.example](deploy/env.example) for domains, email and malware scanning.
+
 ## Production build and operations
 
 Production artifacts are deliberately separate from the development Compose stack. The root [CI workflow](.github/workflows/ci.yml) checks installation, formatting, lint, typechecking, tests, the invite-to-publication E2E flow, workspace build, production Compose configuration, and production Docker images. `Dockerfile.production` exposes `api`, `worker`, `web`, and one-shot `migrate` targets; CI builds but does not publish images or deploy. Nginx serves the public app on its default host and the admin app on an `admin.*` host, and proxies `/api/` to the API service. `docker-compose.production.yml` defines a separate production stack with no host-published database, cache, API, or monitoring ports. It uses distinct named volumes and does not change the local development defaults.

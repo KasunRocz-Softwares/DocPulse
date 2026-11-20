@@ -1,0 +1,150 @@
+# Builds the self-host images, publishes them to GitHub Container Registry,
+# then starts the full self-hosted stack (deploy/docker-compose.yml) and checks it responds.
+#   ghcr.io/kasunrocz-softwares/docpulse-api
+#   ghcr.io/kasunrocz-softwares/docpulse-worker
+#   ghcr.io/kasunrocz-softwares/docpulse-web
+#   ghcr.io/kasunrocz-softwares/docpulse-migrate
+name: Containers
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "database/**"
+      - "nginx/**"
+      - "deploy/**"
+      - "Dockerfile.production"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "turbo.json"
+      - ".dockerignore"
+      - ".github/workflows/containers.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: containers-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/kasunrocz-softwares/docpulse
+
+jobs:
+  build:
+    name: Build ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [api, worker, web, migrate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.app }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=DocPulse ${{ matrix.app }}
+            org.opencontainers.image.description=DocPulse release documentation and publishing: ${{ matrix.app }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.production
+          target: ${{ matrix.app }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=docpulse-${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=docpulse-${{ matrix.app }}
+
+  smoke-test:
+    name: Smoke test the published stack
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Start the stack with the images just built
+        working-directory: deploy
+        run: |
+          cp env.example .env
+          for key in POSTGRES_PASSWORD JWT_ACCESS_SECRET BOOTSTRAP_SECRET WORKER_SECRET NOTIFICATION_SECRET GITHUB_WEBHOOK_SECRET DEPLOYMENT_WEBHOOK_SECRET; do
+            sed -i "s|^${key}=.*|${key}=$(openssl rand -hex 32)|" .env
+          done
+          sed -i "s|^DOCPULSE_VERSION=.*|DOCPULSE_VERSION=sha-${GITHUB_SHA::7}|" .env
+          docker compose up -d
+          docker compose ps
+
+      - name: Wait for the API and both web apps
+        run: |
+          for i in $(seq 1 60); do
+            api=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/v1/health/ready || true)
+            pub=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/healthz || true)
+            adm=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: admin.localhost:8080' http://localhost:8080/ || true)
+            echo "try $i: api=$api public=$pub admin=$adm"
+            if [ "$api" = "200" ] && [ "$pub" = "200" ] && [ "$adm" = "200" ]; then exit 0; fi
+            sleep 5
+          done
+          exit 1
+
+      - name: Check the stack behaves like a fresh install
+        working-directory: deploy
+        run: |
+          set -e
+          secret=$(grep '^BOOTSTRAP_SECRET=' .env | cut -d= -f2)
+          # The admin host serves the admin portal; the main host serves release pages.
+          curl -fsS -H 'Host: admin.localhost:8080' http://localhost:8080/ | grep -q 'RDPS · Release Desk'
+          curl -fsS http://localhost:8080/projects | grep -q '<div id="root">'
+          # First admin can be created exactly once, through the web proxy.
+          code=$(curl -s -o /tmp/boot.json -w '%{http_code}' -X POST http://localhost:8080/api/v1/internal/auth/bootstrap \
+            -H 'Host: admin.localhost:8080' -H 'Content-Type: application/json' \
+            -d "{\"email\":\"smoke@example.test\",\"displayName\":\"Smoke Admin\",\"password\":\"smoke-test-password-123\",\"bootstrapSecret\":\"$secret\"}")
+          echo "bootstrap: $code"
+          test "$code" = "200"
+          grep -q '"accessToken"' /tmp/boot.json
+          again=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8080/api/v1/internal/auth/bootstrap \
+            -H 'Content-Type: application/json' \
+            -d "{\"email\":\"second@example.test\",\"displayName\":\"Second\",\"password\":\"smoke-test-password-123\",\"bootstrapSecret\":\"$secret\"}")
+          echo "second bootstrap: $again"
+          test "$again" = "409"
+
+      - name: Show logs on failure
+        if: failure()
+        working-directory: deploy
+        run: docker compose logs --no-color --tail=200
+
+      - name: Stop the stack
+        if: always()
+        working-directory: deploy
+        run: docker compose down -v

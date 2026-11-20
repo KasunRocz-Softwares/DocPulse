@@ -20,3 +20,6 @@ apps/api/src/generated/
 .codebase-memory/
 graphify-out/
 *.dump
+
+# Design-tool caches
+.impeccable/
