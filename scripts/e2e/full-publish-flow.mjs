@@ -361,10 +361,13 @@ const scopedSearch = await request(
 );
 if (JSON.stringify(scopedSearch).includes(`RDPS_FOREIGN_SENTINEL_${runId}`))
   throw new Error("Internal search exposed another project's release.");
-const publicDirectory = await request("/public/projects");
+// Each project has its own public page; there is no shared public directory that could list it.
+await request("/public/projects", { expected: 404 });
+await request(
+  `/public/projects?q=${encodeURIComponent(isolatedProject.slug)}`,
+  { expected: 404 },
+);
 if (
-  !Array.isArray(publicDirectory.results) ||
-  publicDirectory.results.some((item) => item.slug === isolatedProject.slug) ||
   JSON.stringify(
     await request(`/public/projects/${isolatedProject.slug}`, {
       expected: 404,
@@ -372,14 +375,6 @@ if (
   ).includes(`RDPS_FOREIGN_SENTINEL_${runId}`)
 )
   throw new Error("Public delivery exposed an unpublished isolated project.");
-const filteredPublicDirectory = await request(
-  `/public/projects?q=${encodeURIComponent(isolatedProject.slug)}`,
-);
-if (
-  filteredPublicDirectory.total !== 0 ||
-  filteredPublicDirectory.results.length !== 0
-)
-  throw new Error("Public project search exposed an unpublished project.");
 for (const suffix of [
   "",
   "/releases",
