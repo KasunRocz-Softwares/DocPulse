@@ -52,6 +52,17 @@ async function serve(t, handler) {
   return "http://127.0.0.1:" + port;
 }
 
+// Cleanup hooks run in the order they were registered, so a state folder registered for removal before
+// its runner would be deleted while the runner is still writing its journal. Track every runner a test
+// starts and stop them all before removing a folder.
+const runners = new WeakMap();
+function removeAfterRunnersStop(t, dir) {
+  t.after(async () => {
+    await Promise.all([...(runners.get(t) ?? [])].map((stop) => stop()));
+    await rm(dir, { recursive: true, force: true });
+  });
+}
+
 async function start(t, script, env) {
   const child = spawn(
     process.execPath,
@@ -68,6 +79,8 @@ async function start(t, script, env) {
     await closed;
   };
   t.after(stop);
+  if (!runners.has(t)) runners.set(t, new Set());
+  runners.get(t).add(stop);
   const lines = createInterface({ input: child.stdout });
   const [line] = await Promise.race([
     once(lines, "line"),
@@ -87,8 +100,7 @@ async function fixture(t, targetHandler, options = {}) {
   const journalDir =
     options.journalDir ??
     (await mkdtemp(join(tmpdir(), "rdps-runner-journal-")));
-  if (!options.journalDir)
-    t.after(() => rm(journalDir, { recursive: true, force: true }));
+  if (!options.journalDir) removeAfterRunnersStop(t, journalDir);
   const callbacks = [];
   const api = await serve(t, async (request, response) => {
     const chunks = [];
@@ -346,7 +358,7 @@ test(
   { timeout: 15_000 },
   async (t) => {
     const stateDir = await mkdtemp(join(tmpdir(), "rdps-runner-journal-"));
-    t.after(() => rm(stateDir, { recursive: true, force: true }));
+    removeAfterRunnersStop(t, stateDir);
     let terminalUnavailable = true;
     let deploys = 0;
     let callbackCount = 0;
@@ -411,7 +423,7 @@ test(
     const stateDir = await mkdtemp(
       join(tmpdir(), "rdps-runner-journal-fault-"),
     );
-    t.after(() => rm(stateDir, { recursive: true, force: true }));
+    removeAfterRunnersStop(t, stateDir);
     const preloadPath = join(stateDir, "fail-first-journal-write.mjs");
     await writeFile(
       preloadPath,
