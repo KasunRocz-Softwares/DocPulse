@@ -127,29 +127,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Verify isolated PostgreSQL backup and restore
         run: bash scripts/operations/test-postgres-restore-roundtrip.sh
+      # Starts its own PostgreSQL, Redis, API, worker, deployment runner and sandbox target with
+      # generated secrets, bootstraps an administrator and runs scripts/e2e/full-publish-flow.mjs.
       - name: Run invite-to-publication end-to-end flow
-        env:
-          RDPS_E2E_API_URL: http://localhost:3001/api/v1
-          RDPS_E2E_ADMIN_EMAIL: ci-admin@example.test
-          RDPS_E2E_ADMIN_PASSWORD: ci-only-admin-password
-          BOOTSTRAP_SECRET: ci-only-bootstrap-secret-with-at-least-32-bytes
-          DEPLOYMENT_RUNNER_URL: http://127.0.0.1:3102/dispatch
-          DEPLOYMENT_RUNNER_SIGNING_SECRET: ci-only-deployment-runner-signing-secret-32-bytes
-        run: |
-          pnpm --filter @rdps/api db:deploy
-          pnpm --filter @rdps/api dev > /tmp/rdps-api.log 2>&1 &
-          API_PID=$!
-          RUNNER_PORT=3102 RDPS_API_URL=http://localhost:3001 node scripts/dev-runner/server.mjs > /tmp/rdps-runner.log 2>&1 &
-          RUNNER_PID=$!
-          RDPS_API_URL=http://localhost:3001 pnpm --filter @rdps/worker dev > /tmp/rdps-worker.log 2>&1 &
-          WORKER_PID=$!
-          trap 'kill "$API_PID" "$WORKER_PID" "$RUNNER_PID" 2>/dev/null || true' EXIT
-          curl --retry 40 --retry-delay 1 --retry-connrefused --fail http://localhost:3001/api/v1/health
-          curl --retry 20 --retry-delay 0.25 --retry-connrefused --fail http://localhost:3102/health
-          curl --fail -sS -o /dev/null -X POST http://localhost:3001/api/v1/internal/auth/bootstrap \
-            -H 'content-type: application/json' \
-            -d "{\"email\":\"$RDPS_E2E_ADMIN_EMAIL\",\"displayName\":\"CI Administrator\",\"password\":\"$RDPS_E2E_ADMIN_PASSWORD\",\"bootstrapSecret\":\"$BOOTSTRAP_SECRET\"}"
-          pnpm e2e:release-publish
+        run: pnpm e2e:isolated-publish
       - name: Build workspace
         run: pnpm build
 
